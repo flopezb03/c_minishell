@@ -3,6 +3,7 @@
 #include <unistd.h>
 #include "lib/parser.h"
 #include <sys/wait.h>
+#include <fcntl.h>
 
 // Constantes
 #define BUFF_IN 128
@@ -43,6 +44,31 @@ int main() {
         if (pid < 0) {
             //ERROR
         }else if (pid == 0) {
+            if (command_line->redirect_input != NULL) {
+                FILE* in = fopen(command_line->redirect_input, "r");
+                if (in == NULL) {
+                    //ERROR
+                }else {
+                    dup2(fileno(in),0);
+                }
+            }
+            if (command_line->redirect_output != NULL) {
+                FILE* out = fopen(command_line->redirect_output, "w");  //  MODO?
+                if (out == NULL) {
+                    //  ERROR
+                }else {
+                    dup2(fileno(out),1);
+                }
+            }
+            if (command_line->redirect_error != NULL) {
+                FILE* err = fopen(command_line->redirect_error, "w");
+                if (err == NULL) {
+                    // ERROR
+                }else {
+                    dup2(fileno(err),2);
+                }
+            }
+
             execv(command_line->commands[0].filename,command_line->commands[0].argv);
         }else {
             waitpid(pid,NULL,0);
