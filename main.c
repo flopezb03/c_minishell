@@ -29,6 +29,7 @@ char *pcname = "userpc";
 
 void free_mem(CommandProcess *cpp);
 void close_pipes(CommandProcess *cpp, int num_pipes);
+int builtin_cd(char **argv, int argc);
 
 int main() {
     char pwd[1024];
@@ -37,11 +38,12 @@ int main() {
     tline *command_line = NULL;
     CommandProcess fg;
     int error = 0;
+    int builtin = -1;
 
 
     while (exiting == 0) {
         error = 0;
-
+        builtin = -1;
         // Prompt
         getcwd(pwd,1024);
         printf("%s@%s:%s$ ",user,pcname,pwd);
@@ -56,7 +58,22 @@ int main() {
         if (command_line == NULL) {
             fprintf(stderr, "Error de sintaxis en el comando. %s\n",strerror(errno));
             continue;
-        }else {
+        }
+        if (command_line->ncommands == 0)
+            continue;
+        if (command_line->commands[0].filename == NULL) {
+            if (strcmp(command_line->commands[0].argv[0],"exit") == 0)
+                builtin = 0;
+            else if (strcmp(command_line->commands[0].argv[0],"cd") == 0)
+                builtin = 1;
+            else if (strcmp(command_line->commands[0].argv[0],"jobs") == 0)
+                builtin = 1;
+            else if (strcmp(command_line->commands[0].argv[0],"fg") == 0)
+                builtin = 2;
+            else if (strcmp(command_line->commands[0].argv[0],"umask") == 0)
+                builtin = 3;
+        }
+        if (builtin == -1){
             fg.line = command_line;
 
             //  Comprobacion de ficheros de redirecciones
@@ -105,14 +122,23 @@ int main() {
                 free_mem(&fg);
                 continue;
             }
-
-
-
         }
 
 
 
+
         // Ejecucion
+
+        if (builtin == 1) {
+            int res = builtin_cd(command_line->commands[0].argv,command_line->commands[0].argc);
+            if (res == -1) {
+                perror("chdir");
+            }
+            else if (res == -2) {
+                fprintf(stderr,"Numero incorrecto de parametros en comando cd\n");
+            }
+            continue;
+        }
         if (fg.npipes == 0) {
             if (fg.line->commands[0].filename == NULL) {
                 fprintf(stderr,"El comando no se ha encontrado\n");
@@ -241,4 +267,11 @@ void close_pipes(CommandProcess *cpp, int num_pipes) {
         close(cpp->pipes[i][0]);
         close(cpp->pipes[i][1]);
     }
+}
+int builtin_cd(char **argv, int argc) {
+    if (argc > 2)
+        return -2;
+    if (argc == 1)
+        return chdir(getenv("HOME"));
+    return chdir(argv[1]);
 }
