@@ -5,6 +5,7 @@
 #include <sys/wait.h>
 #include <fcntl.h>
 #include <stdlib.h>
+#include <errno.h>
 
 
 typedef struct CommandProcess {
@@ -24,39 +25,39 @@ typedef struct CommandProcess {
 char *user = "user";
 char *pcname = "userpc";
 
+//  Funciones
+
+void free_mem(CommandProcess *cpp);
+void close_pipes(CommandProcess *cpp, int num_pipes);
 
 int main() {
     char pwd[1024];
     int exiting = 0;
     char buff_in[BUFF_IN];
     tline *command_line = NULL;
-    pid_t pid;
     CommandProcess fg;
+    int error = 0;
 
 
     while (exiting == 0) {
+        error = 0;
+
         // Prompt
         getcwd(pwd,1024);
         printf("%s@%s:%s$ ",user,pcname,pwd);
 
+
         // Entrada
         fgets(buff_in,BUFF_IN,stdin);
+
 
         // Analisis
         command_line = tokenize(buff_in);
         if (command_line == NULL) {
-            //  ERROR
+            fprintf(stderr, "Error de sintaxis en el comando. %s\n",strerror(errno));
             continue;
         }else {
             fg.line = command_line;
-            fg.pids = calloc(command_line->ncommands,sizeof(pid_t));
-            // Reservar y abrir pipes
-            fg.npipes = command_line->ncommands-1;
-            fg.pipes = calloc(fg.npipes,sizeof(int[2]));
-            for (int n_pipe = 0; n_pipe < fg.npipes; n_pipe++)
-                if (pipe(fg.pipes[n_pipe]) == -1) {
-                    //ERROR
-                }
 
             //  Comprobacion de ficheros de redirecciones
             if (fg.line->redirect_input == NULL)
@@ -64,7 +65,8 @@ int main() {
             else {
                 fg.rin = open(fg.line->redirect_input,O_RDONLY);
                 if (fg.rin == -1) {
-                    //  ERROR
+                    perror("open");
+                    continue;
                 }
             }
             if (fg.line->redirect_output == NULL)
@@ -72,7 +74,8 @@ int main() {
             else {
                 fg.rout = open(fg.line->redirect_output,O_WRONLY | O_CREAT);
                 if (fg.rout == -1) {
-                    //  ERROR
+                    perror("open");
+                    continue;
                 }
             }
             if (fg.line->redirect_error == NULL)
@@ -80,19 +83,49 @@ int main() {
             else {
                 fg.rerr = open(fg.line->redirect_error,O_WRONLY | O_CREAT | O_APPEND);
                 if (fg.rerr == -1) {
-                    //  ERROR
+                    perror("open");
+                    continue;
                 }
             }
+
+            //  Reservar pids
+            fg.pids = calloc(command_line->ncommands,sizeof(pid_t));
+
+            // Reservar y abrir pipes
+            fg.npipes = command_line->ncommands-1;
+            fg.pipes = calloc(fg.npipes, sizeof(int[2]));
+            for (int n_pipe = 0; n_pipe < fg.npipes; n_pipe++)
+                if (pipe(fg.pipes[n_pipe]) == -1) {
+                    error = 1;
+                    perror("pipe");
+                    close_pipes(&fg,n_pipe);
+                    break;
+                }
+            if (error == 1) {
+                free_mem(&fg);
+                continue;
+            }
+
+
+
         }
 
 
 
         // Ejecucion
         if (fg.npipes == 0) {
+            if (fg.line->commands[0].filename == NULL) {
+                fprintf(stderr,"El comando no se ha encontrado\n");
+            }
             fg.pids[0] = fork();
             if (fg.pids[0] < 0) {
-                // ERROR
-            }else if (fg.pids[0] == 0) {
+                perror("fork");
+                close_pipes(&fg,fg.npipes);
+                free_mem(&fg);
+                continue;
+            }
+
+            if (fg.pids[0] == 0) {
                 if (fg.rin != -1)
                     dup2(fg.rin,STDIN_FILENO);
                 if (fg.rout != -1)
@@ -101,15 +134,27 @@ int main() {
                     dup2(fg.rerr,STDERR_FILENO);
 
                 execv(fg.line->commands[0].filename,fg.line->commands[0].argv);
+                perror("execv");
+                exit(1);
             }else {
 
             }
         }else {
             for (int n_cmd = 0; n_cmd < fg.line->ncommands; n_cmd++) {
+                if (fg.line->commands[n_cmd].filename == NULL) {
+                    error = 1;
+                    fprintf(stderr,"El comando en la posicion %d no se ha encontrado\n",n_cmd);
+                    break;
+                }
+
                 fg.pids[n_cmd] = fork();
                 if (fg.pids[n_cmd] < 0) {
-                    //ERROR
-                }else if (fg.pids[n_cmd] == 0) {
+                    error = 1;
+                    perror("fork");
+                    break;
+                }
+
+                if (fg.pids[n_cmd] == 0) {
                     // Preparar pipes
                     if (n_cmd == 0) {   // Primer comando
                         // Entrada
@@ -154,22 +199,46 @@ int main() {
 
 
                     execv(fg.line->commands[n_cmd].filename,fg.line->commands[n_cmd].argv);
+                    perror("execv");
+                    exit(1);
                 }else {
 
                 }
             }
+            if (error == 1) {
+                free_mem(&fg);
+                close_pipes(&fg,fg.npipes);
+                continue;
+            }
+
         }
 
 
 
+        //  Cerrar Pipes
+        close_pipes(&fg,fg.npipes);
 
-        for (int n_pipe = 0; n_pipe < fg.npipes; n_pipe++) {
-            close(fg.pipes[n_pipe][0]);
-            close(fg.pipes[n_pipe][1]);
-        }
+
+        //  Esperar subprocesos
         for (int n = 0; n < fg.line->ncommands; n++)
             waitpid(fg.pids[n], NULL, 0);
 
 
+        // Liberar Memoria
+        free_mem(&fg);
+
+    }
+}
+
+
+
+void free_mem(CommandProcess *cpp) {
+    free(cpp->pids);
+    free(cpp->pipes);
+}
+void close_pipes(CommandProcess *cpp, int num_pipes) {
+    for (int i = 0; i < num_pipes; i++) {
+        close(cpp->pipes[i][0]);
+        close(cpp->pipes[i][1]);
     }
 }
