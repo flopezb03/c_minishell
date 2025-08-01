@@ -61,9 +61,17 @@ int main() {
     while (exiting == 0) {
         error = 0;
         builtin = -1;
+        buff_in[0] = '\0';
+        command_line = NULL;
+        fflush(stderr);
+
+
+
         // Prompt
         getcwd(pwd,1024);
-        printf("%s@%s:%s$ ",user,pcname,pwd);
+        fprintf(stdout,"%s@%s:%s$ ",user,pcname,pwd);
+
+
         // Entrada
         fgets(buff_in,BUFF_IN,stdin);
 
@@ -90,6 +98,16 @@ int main() {
         }
         if (builtin == -1){
             fg.line = command_line;
+
+
+            // Comprobacion de comandos
+            for (int n_cmd = 0; n_cmd < fg.line->ncommands; n_cmd++)
+                if (fg.line->commands[n_cmd].filename == NULL) {
+                    fprintf(stderr,"El comando en la posicion %d no se ha encontrado\n",n_cmd);
+                    error = 1;
+                }
+            if (error == 1)
+                continue;
 
             //  Comprobacion de ficheros de redirecciones
             if (fg.line->redirect_input == NULL)
@@ -162,9 +180,6 @@ int main() {
             continue;
         }
         if (fg.npipes == 0) {
-            if (fg.line->commands[0].filename == NULL) {
-                fprintf(stderr,"El comando no se ha encontrado\n");
-            }
             fg.pids[0] = fork();
             if (fg.pids[0] < 0) {
                 perror("fork");
@@ -189,12 +204,6 @@ int main() {
             }
         }else {
             for (int n_cmd = 0; n_cmd < fg.line->ncommands; n_cmd++) {
-                if (fg.line->commands[n_cmd].filename == NULL) {
-                    error = 1;
-                    fprintf(stderr,"El comando en la posicion %d no se ha encontrado\n",n_cmd);
-                    break;
-                }
-
                 fg.pids[n_cmd] = fork();
                 if (fg.pids[n_cmd] < 0) {
                     error = 1;
