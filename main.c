@@ -43,6 +43,7 @@ int cp_finish(CommandProcess *cpp);
 
 int builtin_cd(char **argv, int argc);
 int builtin_jobs(int argc, struct CPList *bg);
+int builtin_fg(char **argv, int argc, struct CPList *bg);
 
 int insert_CPList(struct CPList *list, CommandProcess *e);
 int remove_CPList(struct CPList *list, struct CPNode *node);
@@ -177,6 +178,10 @@ int main() {
         }
         if (builtin == 2) {
             builtin_jobs(command_line->commands[0].argc,&bg);
+            continue;
+        }
+        if (builtin == 3) {
+            builtin_fg(command_line->commands[0].argv,command_line->commands[0].argc,&bg);
             continue;
         }
         if (fg.npipes == 0) {
@@ -356,6 +361,40 @@ int builtin_jobs(int argc, struct CPList *bg) {
         }
         index++;
     }
+
+    return 0;
+}
+int builtin_fg(char **argv, int argc, struct CPList *bg) {
+    if (argc > 2)
+        return -1;
+    if (bg == NULL)
+        return -1;
+
+    long node_index = strtol(argv[1], NULL, 10);
+    if (node_index > bg->size)
+        return -2;
+
+    struct CPNode *node_fg = bg->head;
+    if (node_index == 1) {
+        bg->head = node_fg->next;
+        bg->size--;
+        if (bg->head == NULL)
+            bg->tail = NULL;
+    }else {
+        struct CPNode *aux = bg->head->next;
+        for (int i = 2; i < node_index-1; i++)
+            aux = aux->next;
+        node_fg = aux->next;
+        bg->size--;
+        aux->next = node_fg->next;
+        if (aux->next == NULL)
+            bg->tail = aux;
+    }
+
+    for (int n_cmd = 0; n_cmd < node_fg->e->line->ncommands; n_cmd++)
+        waitpid(node_fg->e->pids[n_cmd], NULL, 0);
+    free_mem(node_fg->e);
+    free(node_fg);
 
     return 0;
 }
