@@ -9,6 +9,7 @@
 
 
 typedef struct CommandProcess {
+    char * command;
     tline *line;
     pid_t *pids;
     int (*pipes)[2];
@@ -17,6 +18,15 @@ typedef struct CommandProcess {
     int rout;
     int rerr;
 }CommandProcess;
+struct CPNode {
+    CommandProcess *e;
+    struct CPNode *next;
+};
+struct CPList {
+    struct CPNode *head;
+    struct CPNode *tail;
+    int size;
+};
 // Constantes
 #define BUFF_IN 128
 
@@ -29,7 +39,13 @@ char *pcname = "userpc";
 
 void free_mem(CommandProcess *cpp);
 void close_pipes(CommandProcess *cpp, int num_pipes);
+int cp_finish(CommandProcess *cpp);
+
 int builtin_cd(char **argv, int argc);
+int builtin_jobs(int argc, struct CPList *bg);
+
+int insert_CPList(struct CPList *list, CommandProcess *e);
+int remove_CPList(struct CPList *list, struct CPNode *node);
 
 int main() {
     char pwd[1024];
@@ -37,6 +53,7 @@ int main() {
     char buff_in[BUFF_IN];
     tline *command_line = NULL;
     CommandProcess fg;
+    struct CPList bg;
     int error = 0;
     int builtin = -1;
 
@@ -47,8 +64,6 @@ int main() {
         // Prompt
         getcwd(pwd,1024);
         printf("%s@%s:%s$ ",user,pcname,pwd);
-
-
         // Entrada
         fgets(buff_in,BUFF_IN,stdin);
 
@@ -67,11 +82,11 @@ int main() {
             else if (strcmp(command_line->commands[0].argv[0],"cd") == 0)
                 builtin = 1;
             else if (strcmp(command_line->commands[0].argv[0],"jobs") == 0)
-                builtin = 1;
-            else if (strcmp(command_line->commands[0].argv[0],"fg") == 0)
                 builtin = 2;
-            else if (strcmp(command_line->commands[0].argv[0],"umask") == 0)
+            else if (strcmp(command_line->commands[0].argv[0],"fg") == 0)
                 builtin = 3;
+            else if (strcmp(command_line->commands[0].argv[0],"umask") == 0)
+                builtin = 4;
         }
         if (builtin == -1){
             fg.line = command_line;
@@ -105,6 +120,9 @@ int main() {
                 }
             }
 
+            // Copiar comando
+            fg.command = strdup(buff_in);
+
             //  Reservar pids
             fg.pids = calloc(command_line->ncommands,sizeof(pid_t));
 
@@ -137,6 +155,10 @@ int main() {
             else if (res == -2) {
                 fprintf(stderr,"Numero incorrecto de parametros en comando cd\n");
             }
+            continue;
+        }
+        if (builtin == 2) {
+            builtin_jobs(command_line->commands[0].argc,&bg);
             continue;
         }
         if (fg.npipes == 0) {
@@ -245,13 +267,22 @@ int main() {
         close_pipes(&fg,fg.npipes);
 
 
-        //  Esperar subprocesos
-        for (int n = 0; n < fg.line->ncommands; n++)
-            waitpid(fg.pids[n], NULL, 0);
+
+        if (fg.line->background == 0) {
+            //  Esperar subprocesos
+            for (int n = 0; n < fg.line->ncommands; n++)
+                waitpid(fg.pids[n], NULL, 0);
+
+            // Liberar Memoria
+            free_mem(&fg);
+        }else {
+            insert_CPList(&bg,&fg);
+        }
 
 
-        // Liberar Memoria
-        free_mem(&fg);
+
+
+
 
     }
 }
@@ -259,6 +290,7 @@ int main() {
 
 
 void free_mem(CommandProcess *cpp) {
+    free(cpp->command);
     free(cpp->pids);
     free(cpp->pipes);
 }
@@ -268,10 +300,112 @@ void close_pipes(CommandProcess *cpp, int num_pipes) {
         close(cpp->pipes[i][1]);
     }
 }
+int cp_finish(CommandProcess *cpp) {
+    if (cpp == NULL)
+        return -1;
+
+    for (int n_pid = 0; n_pid <cpp->line->ncommands; n_pid++) {
+        if (waitpid(cpp->pids[n_pid], NULL, WNOHANG) == 0)
+            return 0;
+    }
+    return 1;
+}
+
+
 int builtin_cd(char **argv, int argc) {
     if (argc > 2)
-        return -2;
+        return -1;
+
+    int out;
     if (argc == 1)
-        return chdir(getenv("HOME"));
-    return chdir(argv[1]);
+        out = chdir(getenv("HOME"));
+    else
+        out = chdir(argv[1]);
+
+    if (out == -1)
+        return -2;
+    return 0;
+}
+int builtin_jobs(int argc, struct CPList *bg) {
+    if (argc > 1)
+        return -1;
+    if (bg == NULL)
+        return -2;
+
+    int index = 1;
+    struct CPNode *node = bg->head;
+    while (node != NULL) {
+        if (cp_finish(node->e) == 0) {
+            printf("\t[%d]+ Running\t\t%s",index,node->e->command);
+            node = node->next;
+        }
+        else {
+            printf("\t[%d]+ Done\t\t\t%s",index,node->e->command);
+            struct CPNode *aux = node;
+            node = node->next;
+            remove_CPList(bg,aux);
+        }
+        index++;
+    }
+
+    return 0;
+}
+
+
+int insert_CPList(struct CPList *list, CommandProcess *e) {
+    if (list == NULL || e == NULL)
+        return -1;
+
+    struct CPNode *new_node = malloc(sizeof(struct CPNode));
+    new_node->next = NULL;
+    new_node->e = malloc(sizeof(CommandProcess));
+    new_node->e->command = e->command;
+    new_node->e->line = e->line;
+    new_node->e->pids = e->pids;
+    new_node->e->pipes = e->pipes;
+    new_node->e->npipes = e->npipes;
+    new_node->e->rin = e->rin;
+    new_node->e->rout = e->rout;
+    new_node->e->rerr = e->rerr;
+
+    if (list->size == 0) {
+        list->head = new_node;
+        list->tail = new_node;
+        list->size = 1;
+    }else {
+        list->tail->next = new_node;
+        list->tail = new_node;
+        list->size++;
+    }
+    return 0;
+}
+int remove_CPList(struct CPList *list, struct CPNode *node) {
+    if (list == NULL || node == NULL)
+        return -1;
+    if (list->size == 0)
+        return -2;
+
+    if (list->head == node) {
+        list->head = node->next;
+        list->size--;
+        if (list->head == NULL)
+            list->tail = NULL;
+        free_mem(node->e);
+        free(node);
+        return 1;
+    }
+    struct CPNode *aux = list->head;
+    while (aux != NULL) {
+        if (aux->next == node) {
+            aux->next = node->next;
+            list->size--;
+            if (node->next == NULL)
+                list->tail = aux;
+            free_mem(node->e);
+            free(node);
+            return 1;
+        }
+        aux = aux->next;
+    }
+    return 0;
 }
