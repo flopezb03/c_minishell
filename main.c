@@ -45,6 +45,7 @@ struct CPList bg;
 
 void free_mem(CommandProcess *cpp);
 void close_pipes(CommandProcess *cpp, int num_pipes);
+void close_rfiles(CommandProcess *cpp);
 int cp_finish(CommandProcess *cpp);
 void init_fg(CommandProcess *cpp);
 
@@ -210,6 +211,7 @@ int main() {
             if (fg.pids[0] < 0) {
                 perror("fork");
                 close_pipes(&fg,fg.npipes);
+                close_rfiles(&fg);
                 free_mem(&fg);
                 continue;
             }
@@ -295,6 +297,7 @@ int main() {
             if (error == 1) {
                 free_mem(&fg);
                 close_pipes(&fg,fg.npipes);
+                close_rfiles(&fg);
                 continue;
             }
 
@@ -304,6 +307,7 @@ int main() {
 
         //  Cerrar Pipes
         close_pipes(&fg,fg.npipes);
+        close_rfiles(&fg);
 
 
 
@@ -338,6 +342,14 @@ void close_pipes(CommandProcess *cpp, int num_pipes) {
         close(cpp->pipes[i][0]);
         close(cpp->pipes[i][1]);
     }
+}
+void close_rfiles(CommandProcess *cpp) {
+    if (cpp->rin != -1)
+        close(cpp->rin);
+    if (cpp->rout != -1)
+        close(cpp->rout);
+    if (cpp->rerr != -1)
+        close(cpp->rerr);
 }
 int cp_finish(CommandProcess *cpp) {
     if (cpp == NULL)
