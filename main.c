@@ -6,6 +6,8 @@
 #include <fcntl.h>
 #include <stdlib.h>
 #include <errno.h>
+#include <sys/stat.h>
+
 
 
 typedef struct CommandProcess {
@@ -49,6 +51,7 @@ void init_fg(CommandProcess *cpp);
 int builtin_cd(char **argv, int argc);
 int builtin_jobs(int argc, struct CPList *bg);
 int builtin_fg(char **argv, int argc, CommandProcess *fg, struct CPList *bg);
+int builtin_umask(char **argv, int argc);
 
 int insert_CPList(struct CPList *list, CommandProcess *e);
 int remove_CPList(struct CPList *list, struct CPNode *node);
@@ -196,6 +199,10 @@ int main() {
         }
         if (builtin == 3) {
             builtin_fg(command_line->commands[0].argv,command_line->commands[0].argc,&fg,&bg);
+            continue;
+        }
+        if (builtin == 4) {
+            builtin_umask(command_line->commands[0].argv,command_line->commands[0].argc);
             continue;
         }
         if (fg.npipes == 0) {
@@ -433,6 +440,19 @@ int builtin_fg(char **argv, int argc, CommandProcess *fg, struct CPList *bg) {
     free_mem(node_fg->e);
     free(node_fg);
 
+    return 0;
+}
+int builtin_umask(char **argv, int argc) {
+    if (argc > 2)
+        return -1;
+
+    if (strlen(argv[1]) > 4)
+        return -2;
+    for (int i = 0; i < strlen(argv[1]); i++)
+        if (argv[1][i] > '7' || argv[1][i] < '0')
+            return -2;
+
+    umask(strtol(argv[1], NULL, 0));
     return 0;
 }
 
