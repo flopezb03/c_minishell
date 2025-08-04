@@ -65,14 +65,12 @@ int main() {
     int exiting = 0;
     char buff_in[BUFF_IN];
     tline *command_line = NULL;
-
-
     int error = 0;
     int builtin = -1;
+
+
     signal(SIGINT, handler_sigint);
-
     getcwd(pwd,1024);
-
 
     while (exiting == 0) {
         error = 0;
@@ -112,9 +110,8 @@ int main() {
             else if (strcmp(command_line->commands[0].argv[0],"umask") == 0)
                 builtin = 4;
         }
-        if (builtin == -1){
+        if (builtin == -1){ // Comando externo
             fg.line = command_line;
-
 
             // Comprobacion de comandos
             for (int n_cmd = 0; n_cmd < fg.line->ncommands; n_cmd++)
@@ -180,30 +177,33 @@ int main() {
 
 
         // Ejecucion
-        if (builtin == 0) {
-            exiting = 1;
-            continue;
-        }
-        if (builtin == 1) {
-            int res = builtin_cd(command_line->commands[0].argv,command_line->commands[0].argc);
-            if (res == -1) {
-                perror("chdir");
+        if (builtin != -1){     // Comandos internos
+            int res;
+
+            if (builtin == 0) {     // exit
+                exiting = 1;
+            }else if (builtin == 1) {   // cd
+                res = builtin_cd(command_line->commands[0].argv,command_line->commands[0].argc);
+                if (res == -1)
+                    fprintf(stderr,"Numero incorrecto de parametros en comando cd\n");
+                else if (res == -2)
+                    perror("chdir");
+            }else if (builtin == 2) {   // jobs
+                if (builtin_jobs(command_line->commands[0].argc,&bg) == -1)
+                    fprintf(stderr,"Numero incorrecto de parametros en comando jobs\n");
+            }else if (builtin == 3) {   // fg
+                res = builtin_fg(command_line->commands[0].argv,command_line->commands[0].argc,&fg,&bg);
+                if (res == -1)
+                    fprintf(stderr,"Numero incorrecto de parametros en comando fg\n");
+                else if (res == -2)
+                    fprintf(stderr,"Parametro invalido, no se puede convertir a int\n");
+            }else if (builtin == 4) {   // umask
+                res = builtin_umask(command_line->commands[0].argv,command_line->commands[0].argc);
+                if (res == -1)
+                    fprintf(stderr,"Numero incorrecto de parametros en comando umask\n");
+                else if (res == -2)
+                    fprintf(stderr,"Parametro invalido\n");
             }
-            else if (res == -2) {
-                fprintf(stderr,"Numero incorrecto de parametros en comando cd\n");
-            }
-            continue;
-        }
-        if (builtin == 2) {
-            builtin_jobs(command_line->commands[0].argc,&bg);
-            continue;
-        }
-        if (builtin == 3) {
-            builtin_fg(command_line->commands[0].argv,command_line->commands[0].argc,&fg,&bg);
-            continue;
-        }
-        if (builtin == 4) {
-            builtin_umask(command_line->commands[0].argv,command_line->commands[0].argc);
             continue;
         }
         if (fg.npipes == 0) {
@@ -229,8 +229,6 @@ int main() {
                 execv(fg.line->commands[0].filename,fg.line->commands[0].argv);
                 perror("execv");
                 exit(1);
-            }else {
-
             }
         }else {
             for (int n_cmd = 0; n_cmd < fg.line->ncommands; n_cmd++) {
@@ -290,8 +288,6 @@ int main() {
                     execv(fg.line->commands[n_cmd].filename,fg.line->commands[n_cmd].argv);
                     perror("execv");
                     exit(1);
-                }else {
-
                 }
             }
             if (error == 1) {
@@ -304,8 +300,7 @@ int main() {
         }
 
 
-
-        //  Cerrar Pipes
+        //  Cerrar Pipes y redirecciones
         close_pipes(&fg,fg.npipes);
         close_rfiles(&fg);
 
@@ -321,12 +316,6 @@ int main() {
         }else {
             insert_CPList(&bg,&fg);
         }
-
-
-
-
-
-
     }
 }
 
@@ -385,14 +374,13 @@ int builtin_cd(char **argv, int argc) {
 
     if (out == -1)
         return -2;
+
     getcwd(pwd,1024);
     return 0;
 }
 int builtin_jobs(int argc, struct CPList *bg) {
     if (argc > 1)
         return -1;
-    if (bg == NULL)
-        return -2;
 
     int index = 1;
     struct CPNode *node = bg->head;
@@ -415,12 +403,13 @@ int builtin_jobs(int argc, struct CPList *bg) {
 int builtin_fg(char **argv, int argc, CommandProcess *fg, struct CPList *bg) {
     if (argc > 2)
         return -1;
-    if (bg == NULL)
-        return -1;
 
-    long node_index = strtol(argv[1], NULL, 10);
-    if (node_index > bg->size)
+    char *endptr;
+    long node_index = strtol(argv[1], &endptr, 10);
+    if (endptr == argv[1] || *endptr != '\0')
         return -2;
+    if (node_index <= 0 || node_index > bg->size)
+        return -3;
 
     struct CPNode *node_fg = bg->head;
     if (node_index == 1) {
@@ -540,5 +529,4 @@ void handler_sigint(int sig) {
     printf("\n");
     for (int n_pid = 0; n_pid < fg.line->ncommands; n_pid++)
         kill(fg.pids[n_pid], SIGTERM);
-
 }
