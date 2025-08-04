@@ -34,29 +34,40 @@ struct CPList {
 
 char *user = "user";
 char *pcname = "userpc";
+char pwd[1024];
+
+CommandProcess fg;
+struct CPList bg;
 
 //  Funciones
 
 void free_mem(CommandProcess *cpp);
 void close_pipes(CommandProcess *cpp, int num_pipes);
 int cp_finish(CommandProcess *cpp);
+void init_fg(CommandProcess *cpp);
 
 int builtin_cd(char **argv, int argc);
 int builtin_jobs(int argc, struct CPList *bg);
-int builtin_fg(char **argv, int argc, struct CPList *bg);
+int builtin_fg(char **argv, int argc, CommandProcess *fg, struct CPList *bg);
 
 int insert_CPList(struct CPList *list, CommandProcess *e);
 int remove_CPList(struct CPList *list, struct CPNode *node);
 
+void handler_sigint(int sig);
+
+
 int main() {
-    char pwd[1024];
+
     int exiting = 0;
     char buff_in[BUFF_IN];
     tline *command_line = NULL;
-    CommandProcess fg;
-    struct CPList bg;
+
+
     int error = 0;
     int builtin = -1;
+    signal(SIGINT, handler_sigint);
+
+    getcwd(pwd,1024);
 
 
     while (exiting == 0) {
@@ -64,12 +75,12 @@ int main() {
         builtin = -1;
         buff_in[0] = '\0';
         command_line = NULL;
+        init_fg(&fg);
         fflush(stderr);
 
 
 
         // Prompt
-        getcwd(pwd,1024);
         fprintf(stdout,"%s@%s:%s$ ",user,pcname,pwd);
 
 
@@ -165,7 +176,10 @@ int main() {
 
 
         // Ejecucion
-
+        if (builtin == 0) {
+            exiting = 1;
+            continue;
+        }
         if (builtin == 1) {
             int res = builtin_cd(command_line->commands[0].argv,command_line->commands[0].argc);
             if (res == -1) {
@@ -181,7 +195,7 @@ int main() {
             continue;
         }
         if (builtin == 3) {
-            builtin_fg(command_line->commands[0].argv,command_line->commands[0].argc,&bg);
+            builtin_fg(command_line->commands[0].argv,command_line->commands[0].argc,&fg,&bg);
             continue;
         }
         if (fg.npipes == 0) {
@@ -194,6 +208,8 @@ int main() {
             }
 
             if (fg.pids[0] == 0) {
+                signal(SIGINT,SIG_IGN);
+
                 if (fg.rin != -1)
                     dup2(fg.rin,STDIN_FILENO);
                 if (fg.rout != -1)
@@ -217,6 +233,8 @@ int main() {
                 }
 
                 if (fg.pids[n_cmd] == 0) {
+                    signal(SIGINT,SIG_IGN);
+
                     // Preparar pipes
                     if (n_cmd == 0) {   // Primer comando
                         // Entrada
@@ -324,6 +342,16 @@ int cp_finish(CommandProcess *cpp) {
     }
     return 1;
 }
+void init_fg(CommandProcess *cpp) {
+    cpp->line = NULL;
+    cpp->command = NULL;
+    cpp->pids = NULL;
+    cpp->pipes = NULL;
+    cpp->npipes = 0;
+    cpp->rin = 0;
+    cpp->rout = 0;
+    cpp->rerr = 0;
+}
 
 
 int builtin_cd(char **argv, int argc) {
@@ -338,6 +366,7 @@ int builtin_cd(char **argv, int argc) {
 
     if (out == -1)
         return -2;
+    getcwd(pwd,1024);
     return 0;
 }
 int builtin_jobs(int argc, struct CPList *bg) {
@@ -364,7 +393,7 @@ int builtin_jobs(int argc, struct CPList *bg) {
 
     return 0;
 }
-int builtin_fg(char **argv, int argc, struct CPList *bg) {
+int builtin_fg(char **argv, int argc, CommandProcess *fg, struct CPList *bg) {
     if (argc > 2)
         return -1;
     if (bg == NULL)
@@ -390,6 +419,14 @@ int builtin_fg(char **argv, int argc, struct CPList *bg) {
         if (aux->next == NULL)
             bg->tail = aux;
     }
+
+    fg->command = node_fg->e->command;
+    fg->line = node_fg->e->line;
+    fg->pids = node_fg->e->pids;
+    fg->npipes = node_fg->e->npipes;
+    fg->rin = node_fg->e->rin;
+    fg->rout = node_fg->e->rout;
+    fg->rerr = node_fg->e->rerr;
 
     for (int n_cmd = 0; n_cmd < node_fg->e->line->ncommands; n_cmd++)
         waitpid(node_fg->e->pids[n_cmd], NULL, 0);
@@ -456,4 +493,20 @@ int remove_CPList(struct CPList *list, struct CPNode *node) {
         aux = aux->next;
     }
     return 0;
+}
+
+
+void handler_sigint(int sig) {
+    if (sig != SIGINT)
+        return;
+    if (fg.line == NULL) {
+        fprintf(stdout,"\n%s@%s:%s$ ",user,pcname,pwd);
+        fflush(stdout);
+        return;
+    }
+
+    printf("\n");
+    for (int n_pid = 0; n_pid < fg.line->ncommands; n_pid++)
+        kill(fg.pids[n_pid], SIGTERM);
+
 }
