@@ -1,4 +1,5 @@
-
+#ifndef PARSER_H
+#define PARSER_H
 typedef struct {
 	char * filename;
 	int argc;
@@ -15,4 +16,5 @@ typedef struct {
 } tline;
 
 extern tline * tokenize(char *str);
+#endif
 

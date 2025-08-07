@@ -1,67 +1,36 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
-#include "lib/parser.h"
 #include <sys/wait.h>
 #include <fcntl.h>
 #include <stdlib.h>
 #include <errno.h>
 #include <sys/stat.h>
+#include "lib/parser.h"
+#include "command_process.h"
+#include "builtin_commands.h"
 
 
 
-typedef struct CommandProcess {
-    char * command;
-    tline *line;
-    pid_t *pids;
-    int (*pipes)[2];
-    int npipes;
-    int rin;
-    int rout;
-    int rerr;
-}CommandProcess;
-struct CPNode {
-    CommandProcess *e;
-    struct CPNode *next;
-};
-struct CPList {
-    struct CPNode *head;
-    struct CPNode *tail;
-    int size;
-};
 // Constantes
 #define BUFF_IN 128
+#define PWD_SIZE 1024
 
 // Variables Globales
 
 char *user = "user";
 char *pcname = "userpc";
-char pwd[1024];
 
 CommandProcess fg;
 struct CPList bg;
 
 //  Funciones
-
-void free_mem(CommandProcess *cpp);
-void close_pipes(CommandProcess *cpp, int num_pipes);
-void close_rfiles(CommandProcess *cpp);
-int cp_finish(CommandProcess *cpp);
-void init_fg(CommandProcess *cpp);
-
-int builtin_cd(char **argv, int argc);
-int builtin_jobs(int argc, struct CPList *bg);
-int builtin_fg(char **argv, int argc, CommandProcess *fg, struct CPList *bg);
-int builtin_umask(char **argv, int argc);
-
-int insert_CPList(struct CPList *list, CommandProcess *e);
-int remove_CPList(struct CPList *list, struct CPNode *node);
-
 void handler_sigint(int sig);
 
 
 int main() {
 
+    char pwd[PWD_SIZE];
     int exiting = 0;
     char buff_in[BUFF_IN];
     tline *command_line = NULL;
@@ -70,14 +39,14 @@ int main() {
 
 
     signal(SIGINT, handler_sigint);
-    getcwd(pwd,1024);
+    getcwd(pwd,PWD_SIZE);
 
     while (exiting == 0) {
         error = 0;
         builtin = -1;
         buff_in[0] = '\0';
         command_line = NULL;
-        init_fg(&fg);
+        init_cp(&fg);
         fflush(stderr);
 
 
@@ -183,7 +152,7 @@ int main() {
             if (builtin == 0) {     // exit
                 exiting = 1;
             }else if (builtin == 1) {   // cd
-                res = builtin_cd(command_line->commands[0].argv,command_line->commands[0].argc);
+                res = builtin_cd(command_line->commands[0].argv,command_line->commands[0].argc,pwd,PWD_SIZE);
                 if (res == -1)
                     fprintf(stderr,"Numero incorrecto de parametros en comando cd\n");
                 else if (res == -2)
@@ -320,207 +289,12 @@ int main() {
 }
 
 
-
-void free_mem(CommandProcess *cpp) {
-    free(cpp->command);
-    free(cpp->pids);
-    free(cpp->pipes);
-}
-void close_pipes(CommandProcess *cpp, int num_pipes) {
-    for (int i = 0; i < num_pipes; i++) {
-        close(cpp->pipes[i][0]);
-        close(cpp->pipes[i][1]);
-    }
-}
-void close_rfiles(CommandProcess *cpp) {
-    if (cpp->rin != -1)
-        close(cpp->rin);
-    if (cpp->rout != -1)
-        close(cpp->rout);
-    if (cpp->rerr != -1)
-        close(cpp->rerr);
-}
-int cp_finish(CommandProcess *cpp) {
-    if (cpp == NULL)
-        return -1;
-
-    for (int n_pid = 0; n_pid <cpp->line->ncommands; n_pid++) {
-        if (waitpid(cpp->pids[n_pid], NULL, WNOHANG) == 0)
-            return 0;
-    }
-    return 1;
-}
-void init_fg(CommandProcess *cpp) {
-    cpp->line = NULL;
-    cpp->command = NULL;
-    cpp->pids = NULL;
-    cpp->pipes = NULL;
-    cpp->npipes = 0;
-    cpp->rin = 0;
-    cpp->rout = 0;
-    cpp->rerr = 0;
-}
-
-
-int builtin_cd(char **argv, int argc) {
-    if (argc > 2)
-        return -1;
-
-    int out;
-    if (argc == 1)
-        out = chdir(getenv("HOME"));
-    else
-        out = chdir(argv[1]);
-
-    if (out == -1)
-        return -2;
-
-    getcwd(pwd,1024);
-    return 0;
-}
-int builtin_jobs(int argc, struct CPList *bg) {
-    if (argc > 1)
-        return -1;
-
-    int index = 1;
-    struct CPNode *node = bg->head;
-    while (node != NULL) {
-        if (cp_finish(node->e) == 0) {
-            printf("\t[%d]+ Running\t\t%s",index,node->e->command);
-            node = node->next;
-        }
-        else {
-            printf("\t[%d]+ Done\t\t\t%s",index,node->e->command);
-            struct CPNode *aux = node;
-            node = node->next;
-            remove_CPList(bg,aux);
-        }
-        index++;
-    }
-
-    return 0;
-}
-int builtin_fg(char **argv, int argc, CommandProcess *fg, struct CPList *bg) {
-    if (argc > 2)
-        return -1;
-
-    char *endptr;
-    long node_index = strtol(argv[1], &endptr, 10);
-    if (endptr == argv[1] || *endptr != '\0')
-        return -2;
-    if (node_index <= 0 || node_index > bg->size)
-        return -3;
-
-    struct CPNode *node_fg = bg->head;
-    if (node_index == 1) {
-        bg->head = node_fg->next;
-        bg->size--;
-        if (bg->head == NULL)
-            bg->tail = NULL;
-    }else {
-        struct CPNode *aux = bg->head->next;
-        for (int i = 2; i < node_index-1; i++)
-            aux = aux->next;
-        node_fg = aux->next;
-        bg->size--;
-        aux->next = node_fg->next;
-        if (aux->next == NULL)
-            bg->tail = aux;
-    }
-
-    fg->command = node_fg->e->command;
-    fg->line = node_fg->e->line;
-    fg->pids = node_fg->e->pids;
-    fg->npipes = node_fg->e->npipes;
-    fg->rin = node_fg->e->rin;
-    fg->rout = node_fg->e->rout;
-    fg->rerr = node_fg->e->rerr;
-
-    for (int n_cmd = 0; n_cmd < node_fg->e->line->ncommands; n_cmd++)
-        waitpid(node_fg->e->pids[n_cmd], NULL, 0);
-    free_mem(node_fg->e);
-    free(node_fg);
-
-    return 0;
-}
-int builtin_umask(char **argv, int argc) {
-    if (argc > 2)
-        return -1;
-
-    if (strlen(argv[1]) > 4)
-        return -2;
-    for (int i = 0; i < strlen(argv[1]); i++)
-        if (argv[1][i] > '7' || argv[1][i] < '0')
-            return -2;
-
-    umask(strtol(argv[1], NULL, 0));
-    return 0;
-}
-
-
-int insert_CPList(struct CPList *list, CommandProcess *e) {
-    if (list == NULL || e == NULL)
-        return -1;
-
-    struct CPNode *new_node = malloc(sizeof(struct CPNode));
-    new_node->next = NULL;
-    new_node->e = malloc(sizeof(CommandProcess));
-    new_node->e->command = e->command;
-    new_node->e->line = e->line;
-    new_node->e->pids = e->pids;
-    new_node->e->pipes = e->pipes;
-    new_node->e->npipes = e->npipes;
-    new_node->e->rin = e->rin;
-    new_node->e->rout = e->rout;
-    new_node->e->rerr = e->rerr;
-
-    if (list->size == 0) {
-        list->head = new_node;
-        list->tail = new_node;
-        list->size = 1;
-    }else {
-        list->tail->next = new_node;
-        list->tail = new_node;
-        list->size++;
-    }
-    return 0;
-}
-int remove_CPList(struct CPList *list, struct CPNode *node) {
-    if (list == NULL || node == NULL)
-        return -1;
-    if (list->size == 0)
-        return -2;
-
-    if (list->head == node) {
-        list->head = node->next;
-        list->size--;
-        if (list->head == NULL)
-            list->tail = NULL;
-        free_mem(node->e);
-        free(node);
-        return 1;
-    }
-    struct CPNode *aux = list->head;
-    while (aux != NULL) {
-        if (aux->next == node) {
-            aux->next = node->next;
-            list->size--;
-            if (node->next == NULL)
-                list->tail = aux;
-            free_mem(node->e);
-            free(node);
-            return 1;
-        }
-        aux = aux->next;
-    }
-    return 0;
-}
-
-
 void handler_sigint(int sig) {
     if (sig != SIGINT)
         return;
     if (fg.line == NULL) {
+        char pwd[PWD_SIZE];
+        getcwd(pwd,PWD_SIZE);
         fprintf(stdout,"\n%s@%s:%s$ ",user,pcname,pwd);
         fflush(stdout);
         return;
